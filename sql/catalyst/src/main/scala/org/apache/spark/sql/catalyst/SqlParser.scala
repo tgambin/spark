@@ -35,7 +35,23 @@ import org.apache.spark.unsafe.types.CalendarInterval
  *
  * Limitations:
  *  - Only supports a very limited subset of SQL.
- *
+ *  // Use reflection to find the reserved words defined in this class.
+  protected val reservedWords =
+    this
+      .getClass
+      .getMethods
+      .filter(_.getReturnType == classOf[Keyword])
+      .map(_.invoke(this).asInstanceOf[Keyword].str)
+
+  override val lexical = new SqlLexical(reservedWords)
+
+  protected def assignAliases(exprs: Seq[Expression]): Seq[NamedExpression] = {
+    exprs.zipWithIndex.map {
+      case (ne: NamedExpression, _) => ne
+      case (e, i) => Alias(e, s"c$i")()
+    }
+  }
+
  * This is currently included mostly for illustrative purposes.  Users wanting more complete support
  * for a SQL like language should checkout the HiveQL support in the sql/hive sub-project.
  */
@@ -111,6 +127,9 @@ object SqlParser extends AbstractSparkSQLParser with DataTypeParser {
   protected val WHEN = Keyword("WHEN")
   protected val WHERE = Keyword("WHERE")
   protected val WITH = Keyword("WITH")
+  protected val RANGEJOIN = Keyword("RANGEJOIN")
+  protected val OVERLAPS = Keyword("OVERLAPS")
+  protected val GENOMEOVERLAP = Keyword("GENOMEOVERLAP")
 
   protected lazy val start: Parser[LogicalPlan] =
     start1 | insert | cte
@@ -169,7 +188,7 @@ object SqlParser extends AbstractSparkSQLParser with DataTypeParser {
     )
 
   protected lazy val relation: Parser[LogicalPlan] =
-    joinedRelation | relationFactor
+    joinedRelation | rangeJoinedRelation | relationFactor
 
   protected lazy val relationFactor: Parser[LogicalPlan] =
     ( tableIdentifier ~ (opt(AS) ~> opt(ident)) ^^ {
@@ -185,9 +204,26 @@ object SqlParser extends AbstractSparkSQLParser with DataTypeParser {
           Join(lhs, rhs, joinType = jt.getOrElse(Inner), cond)
         }
     }
+   protected lazy val joinConditions: Parser[Expression] =
+     ON ~> expression
 
-  protected lazy val joinConditions: Parser[Expression] =
-    ON ~> expression
+  protected lazy val rangeJoinedRelation: Parser[LogicalPlan] =
+    ( relationFactor ~ RANGEJOIN ~ relationFactor ~ ON ~ OVERLAPS ~
+    "(" ~ "(" ~ expression ~ "," ~ expression ~ ")" ~ "," ~
+    "(" ~ expression ~ "," ~ expression ~ ")" ~ ")" ^^ {
+      case r1 ~ _ ~ r2 ~ _ ~ _ ~ _ ~ _ ~ e1 ~ _ ~ e2 ~ _ ~ _ ~ _ ~ e3 ~ _ ~ e4 ~ _ ~ _ =>
+        RangeJoin(r1, r2, Seq(e1, e2, e3, e4))
+    }
+    | relationFactor ~ RANGEJOIN ~ relationFactor ~ ON ~ GENOMEOVERLAP ~
+    "(" ~ "(" ~ expression ~ "," ~ expression ~ "," ~ expression ~ ")" ~ "," ~
+    "(" ~ expression ~ "," ~ expression ~ "," ~ expression ~")" ~ ")" ^^ {
+      case r1 ~ _ ~ r2 ~ _ ~ _ ~ _ ~ _ ~ e1 ~ _ ~ e2 ~ _~ e3 ~ _ ~ _~ _ ~
+        e4 ~ _ ~ e5 ~ _ ~ e6 ~ _~ _ =>
+        RangeJoin(r1, r2, Seq(e1, e2, e3, e4, e5, e6))
+    }
+   )
+
+  protected lazy val rangeJoinConditions: Parser[Seq[Expression]] = repN(4, projection)
 
   protected lazy val joinType: Parser[JoinType] =
     ( INNER           ^^^ Inner

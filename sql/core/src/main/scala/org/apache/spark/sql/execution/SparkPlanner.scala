@@ -38,6 +38,7 @@ class SparkPlanner(val sqlContext: SQLContext) extends SparkStrategies {
       InMemoryScans ::
       BasicOperators ::
       BroadcastNestedLoop ::
+      RangeJoin ::
       CartesianProduct ::
       DefaultJoin :: Nil)
 
