@@ -98,7 +98,11 @@ private[sql] abstract class SparkStrategies extends QueryPlanner[SparkPlan] {
         joins.HashOuterJoin(
           leftKeys, rightKeys, joinType, condition, planLater(left), planLater(right)) :: Nil
 
-      case _ => Nil
+      case ExtractRangeJoinKeys(joinType, rangeJoinKeys, left, right) =>
+        execution.RangeJoin(planLater(left), planLater(right), rangeJoinKeys, sqlContext) :: Nil
+
+      case _ =>
+        Nil
     }
   }
 
@@ -193,6 +197,13 @@ private[sql] abstract class SparkStrategies extends QueryPlanner[SparkPlan] {
       case logical.Limit(IntegerLiteral(limit), logical.Sort(order, child)) =>
         execution.TakeOrdered(limit, order, planLater(child)) :: Nil
       case _ => Nil
+    }
+  }
+
+  object RangeJoin extends Strategy {
+    def apply(plan: LogicalPlan): Seq[SparkPlan] = plan match {
+      case logical.RangeJoin(left, right, condition) =>
+        execution.RangeJoin(planLater(left), planLater(right), condition, sqlContext) :: Nil
     }
   }
 
