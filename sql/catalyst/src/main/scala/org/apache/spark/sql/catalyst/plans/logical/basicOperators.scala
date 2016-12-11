@@ -154,6 +154,16 @@ case class Join(
   }
 }
 
+case class RangeJoin(
+                      left: LogicalPlan,
+                      right: LogicalPlan,
+                      condition: Seq[Expression]) extends BinaryNode{
+
+  override def output: Seq[Attribute] = {
+    left.output ++ right.output
+  }
+}
+
 /**
  * A hint for the optimizer that we should broadcast the `child` if used in a join operator.
  */

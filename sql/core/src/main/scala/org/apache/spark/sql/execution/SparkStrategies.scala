@@ -122,8 +122,10 @@ private[sql] abstract class SparkStrategies extends QueryPlanner[SparkPlan] {
         joins.SortMergeOuterJoin(
           leftKeys, rightKeys, joinType, condition, planLater(left), planLater(right)) :: Nil
 
-      // --- Cases where this strategy does not apply ---------------------------------------------
+      case ExtractRangeJoinKeys(joinType, rangeJoinKeys, left, right) =>
+        execution.RangeJoin(planLater(left), planLater(right), rangeJoinKeys, sqlContext) :: Nil
 
+      // --- Cases where this strategy does not apply ---------------------------------------------
       case _ => Nil
     }
   }
@@ -273,6 +275,14 @@ private[sql] abstract class SparkStrategies extends QueryPlanner[SparkPlan] {
   }
 
   protected lazy val singleRowRdd = sparkContext.parallelize(Seq(InternalRow()), 1)
+
+  object RangeJoin extends Strategy {
+    def apply(plan: LogicalPlan): Seq[SparkPlan] = plan match {
+      case logical.RangeJoin(left, right, condition) =>
+        execution.RangeJoin(planLater(left), planLater(right), condition, sqlContext) :: Nil
+      case _ => Nil
+    }
+  }
 
   object TakeOrderedAndProject extends Strategy {
     def apply(plan: LogicalPlan): Seq[SparkPlan] = plan match {

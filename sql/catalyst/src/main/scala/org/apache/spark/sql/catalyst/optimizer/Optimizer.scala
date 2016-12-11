@@ -30,6 +30,7 @@ import org.apache.spark.sql.catalyst.plans.LeftSemi
 import org.apache.spark.sql.catalyst.plans.logical._
 import org.apache.spark.sql.catalyst.rules._
 import org.apache.spark.sql.types._
+import org.apache.spark.sql.catalyst.planning.ExtractRangeJoinKeys
 
 abstract class Optimizer(conf: CatalystConf) extends RuleExecutor[LogicalPlan] {
   val batches =
@@ -744,7 +745,8 @@ object PushPredicateThroughJoin extends Rule[LogicalPlan] with PredicateHelper {
   /**
    * Splits join condition expressions into three categories based on the attributes required
    * to evaluate them.
-   * @return (canEvaluateInLeft, canEvaluateInRight, haveToEvaluateInBoth)
+    *
+    * @return (canEvaluateInLeft, canEvaluateInRight, haveToEvaluateInBoth)
    */
   private def split(condition: Seq[Expression], left: LogicalPlan, right: LogicalPlan) = {
     val (leftEvaluateCondition, rest) =
@@ -753,6 +755,19 @@ object PushPredicateThroughJoin extends Rule[LogicalPlan] with PredicateHelper {
         rest.partition(_.references subsetOf right.outputSet)
 
     (leftEvaluateCondition, rightEvaluateCondition, commonCondition)
+  }
+
+  /**
+   * It returns true if a logical plan matches one of the reserved cases.
+   * This is developed originally to prevent optimizer from splitting long expressions that
+   * could be potentially range join arguments.
+    *
+    * @param plan
+   * @return true if the plan matches one of the reserved conditions
+   */
+  private def patternReserved(plan: LogicalPlan) = plan match {
+    case ExtractRangeJoinKeys(_, _, _, _) => false // turn to true to prevent rangeJoin opt
+    case _ => false
   }
 
   def apply(plan: LogicalPlan): LogicalPlan = plan transform {
@@ -799,33 +814,38 @@ object PushPredicateThroughJoin extends Rule[LogicalPlan] with PredicateHelper {
       val (leftJoinConditions, rightJoinConditions, commonJoinCondition) =
         split(joinCondition.map(splitConjunctivePredicates).getOrElse(Nil), left, right)
 
-      joinType match {
-        case _ @ (Inner | LeftSemi) =>
-          // push down the single side only join filter for both sides sub queries
-          val newLeft = leftJoinConditions.
-            reduceLeftOption(And).map(Filter(_, left)).getOrElse(left)
-          val newRight = rightJoinConditions.
-            reduceLeftOption(And).map(Filter(_, right)).getOrElse(right)
-          val newJoinCond = commonJoinCondition.reduceLeftOption(And)
+      if (patternReserved(f)) {
+        Join(left, right, joinType, joinCondition)
+      }
+      else {
+        joinType match {
+          case _@(Inner | LeftSemi) =>
+            // push down the single side only join filter for both sides sub queries
+            val newLeft = leftJoinConditions.
+              reduceLeftOption(And).map(Filter(_, left)).getOrElse(left)
+            val newRight = rightJoinConditions.
+              reduceLeftOption(And).map(Filter(_, right)).getOrElse(right)
+            val newJoinCond = commonJoinCondition.reduceLeftOption(And)
 
-          Join(newLeft, newRight, joinType, newJoinCond)
-        case RightOuter =>
-          // push down the left side only join filter for left side sub query
-          val newLeft = leftJoinConditions.
-            reduceLeftOption(And).map(Filter(_, left)).getOrElse(left)
-          val newRight = right
-          val newJoinCond = (rightJoinConditions ++ commonJoinCondition).reduceLeftOption(And)
+            Join(newLeft, newRight, joinType, newJoinCond)
+          case RightOuter =>
+            // push down the left side only join filter for left side sub query
+            val newLeft = leftJoinConditions.
+              reduceLeftOption(And).map(Filter(_, left)).getOrElse(left)
+            val newRight = right
+            val newJoinCond = (rightJoinConditions ++ commonJoinCondition).reduceLeftOption(And)
 
-          Join(newLeft, newRight, RightOuter, newJoinCond)
-        case LeftOuter =>
-          // push down the right side only join filter for right sub query
-          val newLeft = left
-          val newRight = rightJoinConditions.
-            reduceLeftOption(And).map(Filter(_, right)).getOrElse(right)
-          val newJoinCond = (leftJoinConditions ++ commonJoinCondition).reduceLeftOption(And)
+            Join(newLeft, newRight, RightOuter, newJoinCond)
+          case LeftOuter =>
+            // push down the right side only join filter for right sub query
+            val newLeft = left
+            val newRight = rightJoinConditions.
+              reduceLeftOption(And).map(Filter(_, right)).getOrElse(right)
+            val newJoinCond = (leftJoinConditions ++ commonJoinCondition).reduceLeftOption(And)
 
-          Join(newLeft, newRight, LeftOuter, newJoinCond)
-        case FullOuter => f
+            Join(newLeft, newRight, LeftOuter, newJoinCond)
+          case FullOuter => f
+        }
       }
   }
 }

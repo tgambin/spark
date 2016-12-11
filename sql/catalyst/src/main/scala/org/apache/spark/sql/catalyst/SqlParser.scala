@@ -111,6 +111,9 @@ object SqlParser extends AbstractSparkSQLParser with DataTypeParser {
   protected val WHEN = Keyword("WHEN")
   protected val WHERE = Keyword("WHERE")
   protected val WITH = Keyword("WITH")
+  protected val RANGEJOIN = Keyword("RANGEJOIN")
+  protected val OVERLAPS = Keyword("OVERLAPS")
+  protected val GENOMEOVERLAP = Keyword("GENOMEOVERLAP")
 
   protected lazy val start: Parser[LogicalPlan] =
     start1 | insert | cte
@@ -169,7 +172,7 @@ object SqlParser extends AbstractSparkSQLParser with DataTypeParser {
     )
 
   protected lazy val relation: Parser[LogicalPlan] =
-    joinedRelation | relationFactor
+    joinedRelation | rangeJoinedRelation | relationFactor
 
   protected lazy val relationFactor: Parser[LogicalPlan] =
     ( tableIdentifier ~ (opt(AS) ~> opt(ident)) ^^ {
@@ -185,9 +188,26 @@ object SqlParser extends AbstractSparkSQLParser with DataTypeParser {
           Join(lhs, rhs, joinType = jt.getOrElse(Inner), cond)
         }
     }
+   protected lazy val joinConditions: Parser[Expression] =
+     ON ~> expression
 
-  protected lazy val joinConditions: Parser[Expression] =
-    ON ~> expression
+  protected lazy val rangeJoinedRelation: Parser[LogicalPlan] =
+    ( relationFactor ~ RANGEJOIN ~ relationFactor ~ ON ~ OVERLAPS ~
+    "(" ~ "(" ~ expression ~ "," ~ expression ~ ")" ~ "," ~
+    "(" ~ expression ~ "," ~ expression ~ ")" ~ ")" ^^ {
+      case r1 ~ _ ~ r2 ~ _ ~ _ ~ _ ~ _ ~ e1 ~ _ ~ e2 ~ _ ~ _ ~ _ ~ e3 ~ _ ~ e4 ~ _ ~ _ =>
+        RangeJoin(r1, r2, Seq(e1, e2, e3, e4))
+    }
+    | relationFactor ~ RANGEJOIN ~ relationFactor ~ ON ~ GENOMEOVERLAP ~
+    "(" ~ "(" ~ expression ~ "," ~ expression ~ "," ~ expression ~ ")" ~ "," ~
+    "(" ~ expression ~ "," ~ expression ~ "," ~ expression ~")" ~ ")" ^^ {
+      case r1 ~ _ ~ r2 ~ _ ~ _ ~ _ ~ _ ~ e1 ~ _ ~ e2 ~ _~ e3 ~ _ ~ _~ _ ~
+        e4 ~ _ ~ e5 ~ _ ~ e6 ~ _~ _ =>
+        RangeJoin(r1, r2, Seq(e1, e2, e3, e4, e5, e6))
+    }
+   )
+
+  protected lazy val rangeJoinConditions: Parser[Seq[Expression]] = repN(4, projection)
 
   protected lazy val joinType: Parser[JoinType] =
     ( INNER           ^^^ Inner
