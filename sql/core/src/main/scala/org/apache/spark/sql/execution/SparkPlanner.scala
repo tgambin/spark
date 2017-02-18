@@ -36,6 +36,7 @@ class SparkPlanner(val sqlContext: SQLContext) extends SparkStrategies {
       LeftSemiJoin ::
       EquiJoinSelection ::
       InMemoryScans ::
+      RangeJoin ::
       BasicOperators ::
       BroadcastNestedLoop ::
       CartesianProduct ::
